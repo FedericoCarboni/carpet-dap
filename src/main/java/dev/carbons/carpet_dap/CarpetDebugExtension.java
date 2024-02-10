@@ -11,9 +11,11 @@ import com.mojang.brigadier.context.CommandContext;
 import dev.carbons.carpet_dap.dap.CarpetDebugAdapter;
 import dev.carbons.carpet_dap.dap.DapLayer;
 import dev.carbons.carpet_dap.dap.LaunchParams;
+import dev.carbons.carpet_dap.dap.NextParams;
 import net.minecraft.command.CommandRegistryAccess;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.command.ServerCommandSource;
+import org.eclipse.lsp4j.debug.OutputEventArguments;
 import org.eclipse.lsp4j.debug.StoppedEventArguments;
 
 import javax.annotation.Nullable;
@@ -21,29 +23,41 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.file.Path;
 
-import static dev.carbons.carpet_dap.CarpetDapMod.LOGGER;
-import static dev.carbons.carpet_dap.CarpetDapMod.MOD_ID;
+import static dev.carbons.carpet_dap.CarpetDebugMod.LOGGER;
+import static dev.carbons.carpet_dap.CarpetDebugMod.MOD_ID;
 
 /**
  *
  */
-public class CarpetDapExtension implements CarpetExtension {
+public class CarpetDebugExtension implements CarpetExtension {
     @Nullable
     private static DapLayer dapLayer;
     @Nullable
     private static ServerCommandSource source;
+    @Nullable
+    private static Module debuggee;
 
-    private CarpetDapExtension() {
+    public static Integer currentLine;
+
+    private CarpetDebugExtension() {
     }
 
     public static void evalHook(Context c, Context.Type t, Tokenizer.Token token) {
-        if (dapLayer == null) return;
+        if (dapLayer == null || c.host.main != debuggee) return;
         LOGGER.info("evalHook");
         LOGGER.info("at {}", token.lineno);
+        currentLine = token.lineno;
         var stopped = new StoppedEventArguments();
         stopped.setReason("step");
-        stopped.setHitBreakpointIds(new Integer[]{1});
+        stopped.setThreadId(1);
         dapLayer.getClient().stopped(stopped);
+        try {
+            var next = dapLayer.getQueue().take();
+            if (next instanceof NextParams) {
+                return;
+            }
+        } catch (InterruptedException ex) {
+        }
     }
 
     /**
@@ -51,10 +65,23 @@ public class CarpetDapExtension implements CarpetExtension {
      */
     static void initialize() {
         // Register as Carpet Mod extension
-        CarpetServer.manageExtension(new CarpetDapExtension());
+        CarpetServer.manageExtension(new CarpetDebugExtension());
     }
 
-    private int debugCommand(CommandContext<ServerCommandSource> context) {
+    /**
+     * Write some output for the debugging client to view.
+     * @param category "console", "stdout", "stderr" or "important"
+     * @param output Output message to display in the debugging client UI or console
+     */
+    public static void addDebugOutput(String category, String output) {
+        if (dapLayer == null) return;
+        OutputEventArguments outputEvent = new OutputEventArguments();
+        outputEvent.setCategory(category);
+        outputEvent.setOutput(output);
+        dapLayer.getClient().output(outputEvent);
+    }
+
+    private int debuggerCommand(CommandContext<ServerCommandSource> context) {
         if (dapLayer != null) {
             // The debugger is already running
             return 0;
@@ -87,7 +114,7 @@ public class CarpetDapExtension implements CarpetExtension {
         var scriptServer = Vanilla.MinecraftServer_getScriptServer(server);
         if (request instanceof LaunchParams launchParams) {
             LOGGER.info("launch()");
-            var host = CarpetScriptHost.create(scriptServer, Module.fromPath(Path.of(launchParams.program())), false, source, null, false, null);
+            var host = CarpetScriptHost.create(scriptServer, debuggee = Module.fromPath(Path.of(launchParams.program())), false, source, null, false, null);
 //            dapLayer.getClient().output(OutputEventArguments);
         }
     }
@@ -96,7 +123,7 @@ public class CarpetDapExtension implements CarpetExtension {
     public void registerCommands(CommandDispatcher<ServerCommandSource> dispatcher, CommandRegistryAccess commandBuildContext) {
         // Register the `/script debugger` command
         var debugCommand = LiteralArgumentBuilder.<ServerCommandSource>literal("debugger")
-                .executes(this::debugCommand);
+                .executes(this::debuggerCommand);
         dispatcher.register(LiteralArgumentBuilder.<ServerCommandSource>literal("script")
                 .requires(Vanilla::ServerPlayer_canScriptGeneral)
                 .then(debugCommand));

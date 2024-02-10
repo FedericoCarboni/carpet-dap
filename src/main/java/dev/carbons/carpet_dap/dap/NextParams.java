@@ -1,4 +1,4 @@
 package dev.carbons.carpet_dap.dap;
 
-public class NextParams {
+public record NextParams() {
 }

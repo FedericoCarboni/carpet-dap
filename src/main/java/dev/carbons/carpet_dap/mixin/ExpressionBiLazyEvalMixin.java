@@ -4,7 +4,7 @@ import carpet.script.Context;
 import carpet.script.Expression;
 import carpet.script.LazyValue;
 import carpet.script.Tokenizer;
-import dev.carbons.carpet_dap.CarpetDapExtension;
+import dev.carbons.carpet_dap.CarpetDebugExtension;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -48,9 +48,9 @@ import org.spongepowered.asm.mixin.injection.callback.LocalCapture;
 //        "carpet.script.Expression$16",
 //        "carpet.script.Expression$17",
 })
-public class ExpressionLazyEvalMixin {
+public class ExpressionBiLazyEvalMixin {
     @Inject(method = "lazyEval", at = @At("HEAD"), locals = LocalCapture.CAPTURE_FAILHARD, remap = false)
     private void injected(Context context, Context.Type contextType, Expression expression, Tokenizer.Token token, LazyValue v1, LazyValue v2, CallbackInfoReturnable<LazyValue> ci) {
-        CarpetDapExtension.evalHook(context, contextType, token);
+        CarpetDebugExtension.evalHook(context, contextType, token);
     }
 }

@@ -7,7 +7,7 @@ import org.slf4j.LoggerFactory;
 /**
  * Fabric entrypoint
  */
-public class CarpetDapMod implements ModInitializer {
+public class CarpetDebugMod implements ModInitializer {
     public static final String MOD_ID = "carpet-dap";
     public static final String VERSION = "0.1.0-dev";
 
@@ -24,6 +24,6 @@ public class CarpetDapMod implements ModInitializer {
 
         LOGGER.info("Hello Carpet world!");
 
-        CarpetDapExtension.initialize();
+        CarpetDebugExtension.initialize();
     }
 }

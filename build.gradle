@@ -16,18 +16,13 @@ repositories {
 	// Loom adds the essential maven repositories to download Minecraft and libraries from automatically.
 	// See https://docs.gradle.org/current/userguide/declaring_repositories.html
 	// for more information about repositories.
+	maven {
+		url 'https://masa.dy.fi/maven'
+	}
+	mavenCentral()
 }
 
 loom {
-    splitEnvironmentSourceSets()
-
-	mods {
-		"modid" {
-			sourceSet sourceSets.main
-			sourceSet sourceSets.client
-		}
-	}
-
 }
 
 dependencies {
@@ -35,10 +30,16 @@ dependencies {
 	minecraft "com.mojang:minecraft:${project.minecraft_version}"
 	mappings "net.fabricmc:yarn:${project.yarn_mappings}:v2"
 	modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
+	modImplementation "carpet:fabric-carpet:${project.minecraft_version}-${project.carpet_core_version}"
 
 	// Fabric API. This is technically optional, but you probably want it anyway.
-	modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
-	
+//	modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+
+	// Debug server implementation
+//	implementation 'org.eclipse.lsp4j:org.eclipse.lsp4j:0.21.2'
+	implementation 'org.eclipse.lsp4j:org.eclipse.lsp4j.debug:0.18.0'
+//	implementation 'org.eclipse.lsp4j:org.eclipse.lsp4j.jsonrpc.debug:0.21.2'
+
 	// Uncomment the following line to enable the deprecated Fabric API modules. 
 	// These are included in the Fabric API production distribution and allow you to update your mod to the latest modules at a later more convenient time.
 

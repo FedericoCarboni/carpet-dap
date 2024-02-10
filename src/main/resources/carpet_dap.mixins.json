@@ -1,9 +1,10 @@
 {
 	"required": true,
-	"package": "com.example.mixin",
+	"package": "dev.carbons.carpet_dap.mixin",
 	"compatibilityLevel": "JAVA_17",
 	"mixins": [
-		"ExampleMixin"
+		"ExpressionBiLazyEvalMixin",
+		"ExpressionLazyEvalMixin"
 	],
 	"injectors": {
 		"defaultRequire": 1
