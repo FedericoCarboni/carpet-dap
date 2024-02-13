@@ -31,6 +31,7 @@ import java.util.List;
 // addPureLazyFunction 15
 // addContextFunction 16
 // addTypedContextFunction 17
+@SuppressWarnings("unused")
 @Mixin(targets = {
 //        "carpet.script.Expression$1",
 //        "carpet.script.Expression$2",
@@ -49,10 +50,10 @@ import java.util.List;
         "carpet.script.Expression$15",
         "carpet.script.Expression$16",
         "carpet.script.Expression$17",
-})
+}, remap = false)
 public class ExpressionLazyEvalMixin {
     @Inject(method = "lazyEval", at = @At("HEAD"), locals = LocalCapture.CAPTURE_FAILHARD, remap = false)
     private void injected(Context context, Context.Type contextType, Expression expression, Tokenizer.Token token, List<LazyValue> lv, CallbackInfoReturnable<LazyValue> ci) {
-        CarpetDebugExtension.evalHook(context, contextType, token);
+        CarpetDebugExtension.evalHook(expression, context, contextType, token);
     }
 }

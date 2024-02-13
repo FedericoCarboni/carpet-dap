@@ -11,7 +11,8 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 import org.spongepowered.asm.mixin.injection.callback.LocalCapture;
 
-// Unfortunately all eval methods are implemented in anonymous classes in the following methods
+// Unfortunately all eval methods are implemented in anonymous classes in the following methods in the
+// carpet.script.Expression class
 // addLazyUnaryOperator 1
 // addLazyBinaryOperatorWithDelegation 2
 // addLazyFunctionWithDelegation 3
@@ -29,6 +30,7 @@ import org.spongepowered.asm.mixin.injection.callback.LocalCapture;
 // addPureLazyFunction 15
 // addContextFunction 16
 // addTypedContextFunction 17
+@SuppressWarnings("unused")
 @Mixin(targets = {
         "carpet.script.Expression$1",
         "carpet.script.Expression$2",
@@ -47,10 +49,18 @@ import org.spongepowered.asm.mixin.injection.callback.LocalCapture;
 //        "carpet.script.Expression$15",
 //        "carpet.script.Expression$16",
 //        "carpet.script.Expression$17",
-})
+}, remap = false)
 public class ExpressionBiLazyEvalMixin {
     @Inject(method = "lazyEval", at = @At("HEAD"), locals = LocalCapture.CAPTURE_FAILHARD, remap = false)
-    private void injected(Context context, Context.Type contextType, Expression expression, Tokenizer.Token token, LazyValue v1, LazyValue v2, CallbackInfoReturnable<LazyValue> ci) {
-        CarpetDebugExtension.evalHook(context, contextType, token);
+    private void injected(
+            Context context,
+            Context.Type contextType,
+            Expression expression,
+            Tokenizer.Token token,
+            LazyValue v1,
+            LazyValue v2,
+            CallbackInfoReturnable<LazyValue> ci
+    ) {
+        CarpetDebugExtension.evalHook(expression, context, contextType, token);
     }
 }

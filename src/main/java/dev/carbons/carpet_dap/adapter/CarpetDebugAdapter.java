@@ -1,20 +1,18 @@
-package dev.carbons.carpet_dap.dap;
+package dev.carbons.carpet_dap.adapter;
 
-import dev.carbons.carpet_dap.CarpetDebugExtension;
-import org.eclipse.lsp4j.debug.*;
+import carpet.script.Module;
+import dev.carbons.carpet_dap.debug.CarpetDebugHost;
 import org.eclipse.lsp4j.debug.Thread;
-import org.eclipse.lsp4j.debug.launch.DSPLauncher;
+import org.eclipse.lsp4j.debug.*;
 import org.eclipse.lsp4j.debug.services.IDebugProtocolServer;
 
 import javax.annotation.Nullable;
-import java.io.InputStream;
-import java.io.OutputStream;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static dev.carbons.carpet_dap.CarpetDebugMod.LOGGER;
 import static java.util.concurrent.CompletableFuture.completedFuture;
@@ -24,32 +22,17 @@ import static java.util.concurrent.CompletableFuture.completedFuture;
  */
 public class CarpetDebugAdapter implements IDebugProtocolServer {
     private final BlockingQueue<Record> sender;
-
+    private final Map<Source, SourceBreakpoint[]> breakpoints = new HashMap<>();
+    private final CarpetDebugHost debugHost;
     // When true the debugger client sends lines and columns starting from 1 instead of 0
     private boolean linesStartAt1 = false;
     private boolean columnsStartAt1 = false;
-
-    private final Map<Source, SourceBreakpoint[]> breakpoints = new HashMap<>();
-
+    private AtomicInteger sourceReferenceNext = new AtomicInteger(1);
     private Source source;
 
-    public Map<Source, SourceBreakpoint[]> getBreakpoints() {
-        return breakpoints;
-    }
-
-    public CarpetDebugAdapter(BlockingQueue<Record> sender) {
+    public CarpetDebugAdapter(BlockingQueue<Record> sender, CarpetDebugHost debugHost) {
         this.sender = sender;
-    }
-
-    public static DapLayer start(InputStream is, OutputStream os) {
-        BlockingQueue<Record> queue = new LinkedBlockingQueue<>(1);
-        var adapter = new CarpetDebugAdapter(queue);
-        var launcher = DSPLauncher.createServerLauncher(adapter, is, os);
-        var client = launcher.getRemoteProxy();
-        var layer = new DapLayer(adapter, client, queue);
-        launcher.startListening();
-        client.initialized();
-        return layer;
+        this.debugHost = debugHost;
     }
 
     @Nullable
@@ -65,6 +48,32 @@ public class CarpetDebugAdapter implements IDebugProtocolServer {
         if (value instanceof Boolean bool) return bool;
         return null;
     }
+
+    public Map<Source, SourceBreakpoint[]> getBreakpoints() {
+        return breakpoints;
+    }
+
+    public boolean getLinesStartAt1() {
+        return linesStartAt1;
+    }
+
+    public boolean getColumnsStartAt1() {
+        return columnsStartAt1;
+    }
+
+    @Override
+    public CompletableFuture<SourceResponse> source(SourceArguments args) {
+        //
+        var sourceResponse = new SourceResponse();
+        Integer sourceReference = args.getSource().getSourceReference();
+        if (sourceReference != null && sourceReference != 0) {
+            Module module = debugHost.getModule(sourceReference);
+            if (module != null)
+                sourceResponse.setContent(module.code());
+        }
+        return completedFuture(sourceResponse);
+    }
+
 
     @Override
     public CompletableFuture<Capabilities> initialize(InitializeRequestArguments args) {
@@ -137,21 +146,18 @@ public class CarpetDebugAdapter implements IDebugProtocolServer {
         return completedFuture(null);
     }
 
-    @Override
-    public CompletableFuture<BreakpointLocationsResponse> breakpointLocations(BreakpointLocationsArguments args) {
-        return IDebugProtocolServer.super.breakpointLocations(args);
-    }
+//    @Override
+//    public CompletableFuture<BreakpointLocationsResponse> breakpointLocations(BreakpointLocationsArguments args) {
+//        return IDebugProtocolServer.super.breakpointLocations(args);
+//    }
 
     @Override
     public CompletableFuture<SetBreakpointsResponse> setBreakpoints(SetBreakpointsArguments args) {
         LOGGER.info("[DAP]: setBreakpoints()");
         LOGGER.info(args.toString());
         source = args.getSource();
+        debugHost.setBreakpoints(args.getSource().getPath(), args.getBreakpoints(), linesStartAt1);
         var res = new SetBreakpointsResponse();
-        var breakpoint = new Breakpoint();
-        breakpoint.setId(1);
-        breakpoint.setLine(args.getBreakpoints()[0].getLine());
-        res.setBreakpoints(new Breakpoint[]{breakpoint});
         return completedFuture(res);
     }
 
@@ -167,12 +173,9 @@ public class CarpetDebugAdapter implements IDebugProtocolServer {
 
     @Override
     public CompletableFuture<StackTraceResponse> stackTrace(StackTraceArguments args) {
-        var frame = new StackFrame();
-        frame.setId(1);
-        frame.setSource(source);
-        frame.setLine(CarpetDebugExtension.currentLine + (linesStartAt1 ? 1 : 0));
+        StackFrame[] stackTrace = debugHost.getStackTrace(args.getThreadId(), linesStartAt1, columnsStartAt1);
         var res = new StackTraceResponse();
-        res.setStackFrames(new StackFrame[]{frame});
+        res.setStackFrames(stackTrace);
         return completedFuture(res);
     }
 
@@ -185,9 +188,4 @@ public class CarpetDebugAdapter implements IDebugProtocolServer {
     public CompletableFuture<VariablesResponse> variables(VariablesArguments args) {
         return completedFuture(new VariablesResponse());
     }
-
-    //    @Override
-//    public CompletableFuture<Void> launch(Map<String, Object> args) {
-//        return IDebugProtocolServer.super.launch(args);
-//    }
 }

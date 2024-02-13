@@ -1,4 +1,4 @@
-package dev.carbons.carpet_dap.dap;
+package dev.carbons.carpet_dap.adapter;
 
 /**
  * <p>Launch parameters sent by the debugger client.</p>
