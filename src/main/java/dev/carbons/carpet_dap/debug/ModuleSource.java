@@ -3,11 +3,16 @@ package dev.carbons.carpet_dap.debug;
 import carpet.script.Module;
 
 import javax.annotation.Nonnull;
-import javax.annotation.Nullable;
 import java.util.Collections;
 import java.util.Map;
+import java.util.Objects;
 import java.util.WeakHashMap;
 
+/**
+ *
+ * @param type
+ * @param path
+ */
 public record ModuleSource(@Nonnull Type type, @Nonnull String path) {
     /**
      * Since carpet.script.Module can't be extended (it's a record), it is associated with its source as soon as it's
@@ -17,21 +22,23 @@ public record ModuleSource(@Nonnull Type type, @Nonnull String path) {
     //  Maybe other extensions can do it?
     private static final Map<Module, ModuleSource> moduleSources = Collections.synchronizedMap(new WeakHashMap<>());
 
-    public static void addModule(@Nonnull Module module, @Nonnull String path) {
-        moduleSources.put(module, new ModuleSource(Type.FILESYSTEM, path));
+    /**
+     * Add the path of a Scarpet module.
+     * @param module scarpet module.
+     * @param moduleSource module source.
+     */
+    public static void setModuleSource(@Nonnull Module module, @Nonnull ModuleSource moduleSource) {
+        moduleSources.put(module, moduleSource);
     }
 
-    public static void addInternalModule(@Nonnull Module module, @Nonnull String path) {
-        moduleSources.put(module, new ModuleSource(Type.JAR, path));
-    }
-
+    /**
+     * Returns the source of the given module.
+     * @param module a Scarpet module.
+     * @return source of the given module.
+     */
     @Nonnull
     public static ModuleSource getModuleSource(@Nonnull Module module) {
-        ModuleSource moduleSource = moduleSources.get(module);
-        if (moduleSource == null) {
-            throw new NullPointerException();
-        }
-        return moduleSource;
+        return Objects.requireNonNull(moduleSources.get(module));
     }
 
     public enum Type {

@@ -50,6 +50,8 @@ public final class CarpetDebugHost {
     // The entrypoint of the debug host, e.g. the `program` in the launch request.
     @Nullable
     private Module entrypoint;
+    // Suspended state for variables and scopes
+    private SuspendedState suspendedState = new SuspendedState();
     // true when the target code is stopped
     private boolean stopped = false;
 
@@ -62,6 +64,10 @@ public final class CarpetDebugHost {
         debugClient.initialized();
     }
 
+    public SuspendedState getSuspendedState() {
+        return suspendedState;
+    }
+
     public void sendToConsole(@Nonnull String message) {
         OutputEventArguments outputEvent = new OutputEventArguments();
         outputEvent.setCategory(OutputEventArgumentsCategory.CONSOLE);
@@ -69,7 +75,7 @@ public final class CarpetDebugHost {
         debugClient.output(outputEvent);
     }
 
-    public void sendOutput(@Nonnull String output, @Nonnull Module module, int line, int character) {
+    public void sendOutput(@Nonnull Module module, int line, int character, @Nonnull String output, @Nullable Object data) {
         ModuleSource moduleSource = getModuleSource(module);
         OutputEventArguments outputEvent = new OutputEventArguments();
         outputEvent.setCategory(OutputEventArgumentsCategory.STDOUT);
@@ -77,7 +83,12 @@ public final class CarpetDebugHost {
         outputEvent.setSource(getSource(module, moduleSource));
         outputEvent.setLine(line + (debugAdapter.getLinesStartAt1() ? 1 : 0));
         outputEvent.setColumn(character + (debugAdapter.getColumnsStartAt1() ? 1 : 0));
+        outputEvent.setData(data);
         debugClient.output(outputEvent);
+    }
+
+    public void sendOutput(@Nonnull Module module, int line, int character, @Nonnull String output) {
+        sendOutput(module, line, character, output, null);
     }
 
     private boolean shouldStop(@Nonnull Module module, int line) {
@@ -178,12 +189,12 @@ public final class CarpetDebugHost {
      * @param startLine      start line of the stack frame
      * @param startCharacter start character of the stack frame
      */
-    public void pushStackFrame(@Nonnull String name, @Nonnull Context context, @Nonnull Module module, int startLine, int startCharacter) {
+    public void pushStackFrame(@Nonnull String name, @Nonnull List<String> args, @Nonnull Context context, @Nonnull Module module, int startLine, int startCharacter) {
         int sourceReference = getSourceReference(module);
         StackTrace stackTrace = stackTraces.get(1);
         ModuleSource moduleSource = getModuleSource(module);
         if (moduleSource == null) throw new NullPointerException();
-        StackTrace.CarpetStackFrame stackFrame = stackTrace.addStackFrame(context, name, module, moduleSource, sourceReference, startLine, startCharacter);
+        StackTrace.CarpetStackFrame stackFrame = stackTrace.addStackFrame(args, context, name, module, moduleSource, sourceReference, startLine, startCharacter);
         stackFrames.put(stackFrame.id, stackFrame);
     }
     private int getSourceReference(@Nonnull Module module) {
@@ -219,10 +230,10 @@ public final class CarpetDebugHost {
     public void setStackTrace(@Nonnull Context context, @Nonnull Module module, int line, int character) {
         StackTrace stackTrace = stackTraces.get(1);
         if (stackTrace.isEmpty()) {
-            StackTrace.CarpetStackFrame stackFrame = stackTrace.addStackFrame(context, "<global>", module, getModuleSource(module), getSourceReference(module), line, character);
+            StackTrace.CarpetStackFrame stackFrame = stackTrace.addStackFrame(null, context, "<global>", module, getModuleSource(module), getSourceReference(module), line, character);
             stackFrames.put(stackFrame.id, stackFrame);
         } else
-        stackTrace.updateStackFrame(context, module, module == null ? null : getModuleSource(module), getSourceReference(module), line, character);
+        stackTrace.updateStackFrame(null, context, module, module == null ? null : getModuleSource(module), getSourceReference(module), line, character);
         LOGGER.info("trace at line {}", line);
         if (shouldStop(module, line)) {
             StoppedEventArguments stoppedEventArguments = new StoppedEventArguments();
@@ -244,6 +255,7 @@ public final class CarpetDebugHost {
                     break;
                 }
             }
+            suspendedState = new SuspendedState();
         }
     }
 
@@ -259,6 +271,10 @@ public final class CarpetDebugHost {
 
     public StackFrame[] getStackTrace(int threadId, boolean linesStartAt1, boolean columnsStartAt1) {
         return stackTraces.get(threadId).getStackFrames(linesStartAt1, columnsStartAt1);
+    }
+
+    public Scope[] getScopes(int frameId, SuspendedState suspendedState) {
+        return stackFrames.get(frameId).getScopes(suspendedState);
     }
 
     /**

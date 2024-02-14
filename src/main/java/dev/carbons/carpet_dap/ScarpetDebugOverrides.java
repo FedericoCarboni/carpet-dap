@@ -6,8 +6,9 @@ import carpet.script.value.EntityValue;
 import carpet.script.value.FormattedTextValue;
 import carpet.script.value.ListValue;
 import carpet.script.value.Value;
+import dev.carbons.carpet_dap.adapter.PlayerValue;
 import dev.carbons.carpet_dap.debug.CarpetDebugHost;
-import dev.carbons.carpet_dap.debug.ModuleSource;
+import it.unimi.dsi.fastutil.Pair;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.server.network.ServerPlayerEntity;
@@ -59,13 +60,13 @@ class ScarpetDebugOverrides {
         Value res;
         if (args.size() == 1) {
             res = args.get(0);
-            CarpetDebugExtension.addDebugOutput("stderr", res.getString());
+//            CarpetDebugExtension.addDebugOutput("stderr", res.getString());
             CarpetScriptServer.LOG.info(res.getString());
         } else if (args.size() == 2) {
             String level = args.get(0).getString().toLowerCase(Locale.ROOT);
             res = args.get(1);
             String message = res.getString();
-            CarpetDebugExtension.addDebugOutput("stderr", message);
+//            CarpetDebugExtension.addDebugOutput("stderr", message);
             switch (level) {
                 case "debug" -> {
                     CarpetScriptServer.LOG.debug(message);
@@ -93,17 +94,20 @@ class ScarpetDebugOverrides {
     }
 
     @NotNull
-    private static List<ServerCommandSource> getServerCommandSources(Value res, MinecraftServer server) {
+    private static Pair<List<ServerCommandSource>, PlayerValue[]> getServerCommandSources(Value res, MinecraftServer server) {
         List<Value> playerValues = (res instanceof ListValue list) ? list.getItems() : Collections.singletonList(res);
         List<ServerCommandSource> playerTargets = new ArrayList<>();
-        playerValues.forEach(pv -> {
+        PlayerValue[] players = new PlayerValue[playerValues.size()];
+        int i = 0;
+        for (Value pv : playerValues) {
             ServerPlayerEntity player = EntityValue.getPlayerByValue(server, pv);
             if (player == null) {
                 throw new InternalExpressionException("Cannot target player " + pv.getString() + " in print");
             }
             playerTargets.add(player.getCommandSource());
-        });
-        return playerTargets;
+            players[i++] = new PlayerValue(player.getName().getString(), player.getPos());
+        }
+        return Pair.of(playerTargets, players);
     }
 
     private static class LoggerFunction extends Fluff.AbstractLazyFunction {
@@ -155,8 +159,11 @@ class ScarpetDebugOverrides {
             MinecraftServer server = s.getServer();
             Value value = args.get(0).evalValue(context, contextType);
             List<ServerCommandSource> targets = null;
+            PlayerValue[] players = null;
             if (args.size() == 2) {
-                targets = getServerCommandSources(value, server);
+                var pair = getServerCommandSources(value, server);
+                targets = pair.left();
+                players = pair.right();
                 value = args.get(1).evalValue(context, contextType);
             } else if (context.host.user != null) {
                 ServerPlayerEntity player = server.getPlayerManager().getPlayer(carpetContext.host.user);
@@ -175,7 +182,7 @@ class ScarpetDebugOverrides {
             CarpetDebugHost debugHost = CarpetDebugExtension.getDebugHost();
             if (debugHost != null && expr.module != null) {
                 String outputMessage = getOutputMessage(context, token, value);
-                debugHost.sendOutput(outputMessage, expr.module, token.lineno, token.linepos);
+                debugHost.sendOutput(expr.module, token.lineno, token.linepos, outputMessage, players);
             }
 
             Value ret = value;

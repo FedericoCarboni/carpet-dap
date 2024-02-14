@@ -66,19 +66,6 @@ public class CarpetDebugExtension implements CarpetExtension {
         debugHost.setStackTrace(c, expr.module, token.lineno, token.linepos);
     }
 
-    /**
-     * Write some output for the debugging client to view.
-     * @param category "console", "stdout", "stderr" or "important"
-     * @param output Output message to display in the debugging client UI or console
-     */
-    public static void addDebugOutput(String category, String output) {
-//        if (dapLayer == null) return;
-        OutputEventArguments outputEvent = new OutputEventArguments();
-        outputEvent.setCategory(category);
-        outputEvent.setOutput(output);
-//        dapLayer.getClient().output(outputEvent);
-    }
-
     private int debuggerCommand(CommandContext<ServerCommandSource> context) {
 //        if (dapLayer != null) {
 //            // The debugger is already running

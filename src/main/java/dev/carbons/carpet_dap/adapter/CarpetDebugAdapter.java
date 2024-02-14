@@ -181,11 +181,15 @@ public class CarpetDebugAdapter implements IDebugProtocolServer {
 
     @Override
     public CompletableFuture<ScopesResponse> scopes(ScopesArguments args) {
-        return completedFuture(new ScopesResponse());
+        var scopes = new ScopesResponse();
+        scopes.setScopes(debugHost.getScopes(args.getFrameId(), debugHost.getSuspendedState()));
+        return completedFuture(scopes);
     }
 
     @Override
     public CompletableFuture<VariablesResponse> variables(VariablesArguments args) {
-        return completedFuture(new VariablesResponse());
+        var vars = new VariablesResponse();
+        vars.setVariables(debugHost.getSuspendedState().get(args.getVariablesReference()));
+        return completedFuture(vars);
     }
 }

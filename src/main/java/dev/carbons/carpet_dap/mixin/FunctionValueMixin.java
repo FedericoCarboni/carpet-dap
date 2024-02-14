@@ -12,6 +12,7 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 import org.spongepowered.asm.mixin.injection.callback.LocalCapture;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import static dev.carbons.carpet_dap.CarpetDebugExtension.debugHost;
@@ -36,7 +37,7 @@ public class FunctionValueMixin {
             locals = LocalCapture.CAPTURE_FAILHARD,
             remap = false
     )
-    private void injectedExecute(
+    private void atExecute(
             Context outerContext,
             Context.Type contextType,
             Expression expression,
@@ -46,11 +47,16 @@ public class FunctionValueMixin {
             CallbackInfoReturnable<LazyValue> ci,
             Context functionContext
     ) {
-        LOGGER.info("function call");
-        if (debugHost == null) return;
         Module module = expression.module;
-        if (module == null) return;
-        debugHost.pushStackFrame(name, functionContext, module, token.lineno, token.linepos);
+        if (debugHost == null || module == null) return;
+        // Stop before executing the function
+        debugHost.setStackTrace(functionContext, module, token.lineno, token.linepos);
+        List<String> newParams = args;
+        if (varArgs != null) {
+            newParams = new ArrayList<>(newParams);
+            newParams.add(varArgs);
+        }
+        debugHost.pushStackFrame(name == null || name.equals("_") ? "<anonymous>" : name, newParams, functionContext, module, token.lineno, token.linepos);
     }
 
     @Inject(
@@ -59,7 +65,7 @@ public class FunctionValueMixin {
             locals = LocalCapture.CAPTURE_FAILHARD,
             remap = false
     )
-    private void injectedExecuteAfterEval(
+    private void afterExecute(
             Context outerContext,
             Context.Type contextType,
             Expression expression,
@@ -69,11 +75,8 @@ public class FunctionValueMixin {
             CallbackInfoReturnable<LazyValue> ci,
             Context functionContext
     ) {
-        if (debugHost == null) return;
-        Module module = expression.module;
-        if (module == null) return;
+        if (debugHost == null || expression.module == null) return;
+        // Got to the return of the function pop out one stack frame.
         debugHost.popStackFrame();
-//        debugHost.pushStackFrame(name, functionContext, module, token.lineno, token.linepos);
     }
-
 }
