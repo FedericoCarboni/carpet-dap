@@ -9,7 +9,7 @@ import java.util.List;
 import java.util.function.Supplier;
 
 public final class SuspendedState {
-    // An array of Scarpet values, this is used for the Variables requests.
+    // An array of lazy Variable[], this is used for the Variables requests.
     private final List<Supplier<Variable[]>> state = new ArrayList<>();
 
     public int setVariables(@Nonnull Supplier<Variable[]> value) {

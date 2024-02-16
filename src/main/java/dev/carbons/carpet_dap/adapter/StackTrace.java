@@ -2,6 +2,9 @@ package dev.carbons.carpet_dap.adapter;
 
 import carpet.script.Context;
 import carpet.script.Module;
+import carpet.script.value.AbstractListValue;
+import carpet.script.value.MapValue;
+import carpet.script.value.Value;
 import dev.carbons.carpet_dap.CarpetDebugMod;
 import dev.carbons.carpet_dap.debug.ModuleSource;
 import dev.carbons.carpet_dap.debug.SuspendedState;
@@ -13,6 +16,7 @@ import org.eclipse.lsp4j.debug.Variable;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -39,11 +43,7 @@ public class StackTrace {
         return stack.isEmpty();
     }
 
-    public void updateStackFrame(@Nullable List<String> args, @Nonnull Context context, @Nonnull Module module, @Nonnull ModuleSource moduleSource, int sourceReference, int line, int character) {
-        if (stack.isEmpty()) {
-            addStackFrame(args, context, "global", module, moduleSource, sourceReference, line, character);
-            return;
-        }
+    public void updateStackFrame(@Nonnull Context context, int line, int character) {
         var stackFrame = stack.get(stack.size() - 1);
         stackFrame.context = context;
         stackFrame.line = line;
@@ -51,6 +51,7 @@ public class StackTrace {
     }
 
     public StackFrame[] getStackFrames(boolean linesStartAt1, boolean columnsStartAt1) {
+        // DAP stack traces are reversed
         var stackFrames = new StackFrame[stack.size()];
         int i = stack.size();
         for (CarpetStackFrame stackFrame : stack) {
@@ -61,7 +62,7 @@ public class StackTrace {
 
     public static class CarpetStackFrame {
         @Nonnull
-        protected Context context;
+        public Context context;
         @Nonnull
         private final Module module;
         @Nonnull
@@ -95,11 +96,9 @@ public class StackTrace {
         StackFrame toStackFrame(boolean linesStartAt1, boolean columnsStartAt1) {
             var source = new Source();
             source.setName(module.name());
-            if (sourceReference == 0) {
-                source.setPath(moduleSource.path());
-            }
-            source.setSourceReference(sourceReference);
-
+            source.setPath(moduleSource.path());
+            if (moduleSource.type() != ModuleSource.Type.FILESYSTEM)
+                source.setSourceReference(sourceReference);
             var stackFrame = new StackFrame();
             stackFrame.setId(id);
             stackFrame.setName(name);
@@ -109,9 +108,48 @@ public class StackTrace {
             return stackFrame;
         }
 
+        public static Variable toVariable(String name, Value value, SuspendedState suspendedState) {
+            var variable = new Variable();
+            variable.setName(name);
+            variable.setValue(value.getPrettyString());
+            variable.setType(value.getTypeString());
+            if (value instanceof final MapValue mapValue) {
+                variable.setNamedVariables(mapValue.length());
+                variable.setVariablesReference(suspendedState.setVariables(() -> {
+                    List<Variable> variables = new ArrayList<>();
+                    for (Value val : mapValue) {
+                        variables.add(toVariable(val.getString(), mapValue.get(val), suspendedState));
+                    }
+                    return variables.toArray(new Variable[0]);
+                }));
+            } else if (value instanceof final AbstractListValue listValue) {
+                variable.setIndexedVariables(listValue.length());
+                variable.setVariablesReference(suspendedState.setVariables(() -> {
+                    List<Variable> variables = new ArrayList<>();
+                    int i = 0;
+                    for (Value val : listValue) {
+                        variables.add(toVariable(Integer.toString(i), val, suspendedState));
+                        i++;
+                    }
+                    return variables.toArray(new Variable[0]);
+                }));
+            }
+            return variable;
+        }
+
         @Nonnull
         public Scope[] getScopes(SuspendedState suspendedState) {
             List<Scope> scopes = new ArrayList<>(2);
+            var globalsScope = new Scope();
+            globalsScope.setName("Globals");
+            globalsScope.setVariablesReference(suspendedState.setVariables(() -> {
+                List<Variable> variables = new ArrayList<>();
+                context.host.globalVariableNames(module, (s) -> true).forEach((name) -> {
+                    variables.add(toVariable(name, context.host.getGlobalVariable(name).evalValue(context), suspendedState));
+                });
+                return variables.toArray(new Variable[]{});
+            }));
+            scopes.add(globalsScope);
             var localsScope = new Scope();
             localsScope.setName("Locals");
             localsScope.setVariablesReference(suspendedState.setVariables(() -> {
@@ -120,13 +158,8 @@ public class StackTrace {
                     if (value == null) return;
                     if (args != null && args.contains(name)) return;
                     var val = value.evalValue(context);
-                    var variable = new Variable();
-                    variable.setName(name);
-                    variable.setValue(val.getPrettyString());
-                    variable.setType(val.getTypeString());
-                    variables.add(variable);
+                    variables.add(toVariable(name, val, suspendedState));
                 });
-                CarpetDebugMod.LOGGER.info("{}", variables);
                 return variables.toArray(new Variable[]{});
             }));
             if (args != null) {
@@ -138,11 +171,7 @@ public class StackTrace {
                     for (String arg : args) {
                         var value = context.variables.get(arg);
                         var val = value.evalValue(context);
-                        var variable = new Variable();
-                        variable.setName(arg);
-                        variable.setValue(val.getPrettyString());
-                        variable.setType(val.getTypeString());
-                        variables.add(variable);
+                        variables.add(toVariable(arg, val, suspendedState));
                     }
                     return variables.toArray(new Variable[]{});
                 }));

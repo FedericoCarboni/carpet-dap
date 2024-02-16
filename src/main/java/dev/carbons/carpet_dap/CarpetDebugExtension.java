@@ -4,6 +4,7 @@ import carpet.CarpetExtension;
 import carpet.CarpetServer;
 import carpet.script.Module;
 import carpet.script.*;
+import carpet.script.external.Carpet;
 import carpet.script.external.Vanilla;
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
@@ -33,15 +34,9 @@ import static dev.carbons.carpet_dap.CarpetDebugMod.MOD_ID;
 /**
  *
  */
-public class CarpetDebugExtension implements CarpetExtension {
-//    @Nullable
-//    private static CarpetDebugAdapter dapLayer;
+public final class CarpetDebugExtension implements CarpetExtension {
     @Nullable
-    private static ServerCommandSource source;
-    @Nullable
-    private static Module debuggee;
-    @Nullable
-    public static CarpetDebugHost debugHost;
+    private static CarpetDebugHost debugHost;
 
     private CarpetDebugExtension() {
     }
@@ -54,6 +49,18 @@ public class CarpetDebugExtension implements CarpetExtension {
         CarpetServer.manageExtension(new CarpetDebugExtension());
     }
 
+    /**
+     *
+     * @param debugHost
+     */
+    public static void setDebugHost(@Nullable CarpetDebugHost debugHost) {
+        CarpetDebugExtension.debugHost = debugHost;
+    }
+
+    /**
+     * @return The debug host responsible for the current debugging session, or {@code null} if there is no active
+     * debugging session.
+     */
     @Nullable
     public static CarpetDebugHost getDebugHost() {
         return debugHost;
@@ -67,11 +74,20 @@ public class CarpetDebugExtension implements CarpetExtension {
     }
 
     private int debuggerCommand(CommandContext<ServerCommandSource> context) {
+        ServerCommandSource source = context.getSource();
+        if (debugHost != null) {
+            // There is already an active debugging session
+            Carpet.Messenger_message(source, "r [DAP]: Debugger is already active.");
+            return 0;
+        }
+        MinecraftServer server = source.getServer();
+        CarpetScriptServer scriptServer = Vanilla.MinecraftServer_getScriptServer(server);
+        Carpet.Messenger_message(source, " [DAP]: Starting new debugging session");
+
 //        if (dapLayer != null) {
 //            // The debugger is already running
 //            return 0;
 //        }
-        source = context.getSource();
         // TODO: implement command
 
         LOGGER.info("Starting debugging server");

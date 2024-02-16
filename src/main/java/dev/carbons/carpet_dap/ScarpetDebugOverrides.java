@@ -17,7 +17,7 @@ import org.jetbrains.annotations.NotNull;
 
 import java.util.*;
 
-class ScarpetDebugOverrides {
+final class ScarpetDebugOverrides {
     @NotNull
     private static String getOutputMessage(Context context, Tokenizer.Token token, Value value) {
         String messageString = value.getString();

@@ -1,18 +1,20 @@
 package dev.carbons.carpet_dap.debug;
 
-import carpet.script.CarpetScriptHost;
-import carpet.script.CarpetScriptServer;
-import carpet.script.Context;
+import carpet.script.*;
 import carpet.script.Module;
 import carpet.script.exception.LoadException;
 import carpet.script.external.Carpet;
 import carpet.script.external.Vanilla;
 import carpet.script.value.FunctionValue;
+import carpet.script.value.Value;
+import carpet.utils.Messenger;
+import dev.carbons.carpet_dap.CarpetDebugExtension;
 import dev.carbons.carpet_dap.adapter.*;
 import it.unimi.dsi.fastutil.ints.Int2ObjectMap;
 import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
 import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.util.math.BlockPos;
 import org.eclipse.lsp4j.debug.*;
 import org.eclipse.lsp4j.debug.launch.DSPLauncher;
 import org.eclipse.lsp4j.debug.services.IDebugProtocolClient;
@@ -31,7 +33,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static dev.carbons.carpet_dap.CarpetDebugMod.LOGGER;
 import static dev.carbons.carpet_dap.debug.ModuleSource.getModuleSource;
 
-public final class CarpetDebugHost {
+public class CarpetDebugHost {
 
     // Just used as a map index (sourceReference) -> Module, entries are never removed.
     private final List<Module> modules = new ArrayList<>();
@@ -40,13 +42,15 @@ public final class CarpetDebugHost {
     private final Int2ObjectMap<StackTrace> stackTraces = new Int2ObjectOpenHashMap<>();
     private final Int2ObjectMap<StackTrace.CarpetStackFrame> stackFrames = new Int2ObjectOpenHashMap<>();
     private final AtomicInteger stackFrameNext = new AtomicInteger(1);
-    private final BlockingQueue<Record> queue = new LinkedBlockingQueue<>(1);
+    private final BlockingQueue<Record> channel = new LinkedBlockingQueue<>(1);
     @Nonnull
     private final CarpetScriptServer scriptServer;
     @Nonnull
     private final CarpetDebugAdapter debugAdapter;
     @Nonnull
     private final IDebugProtocolClient debugClient;
+    @Nullable
+    private CarpetScriptHost host;
     // The entrypoint of the debug host, e.g. the `program` in the launch request.
     @Nullable
     private Module entrypoint;
@@ -54,16 +58,17 @@ public final class CarpetDebugHost {
     private SuspendedState suspendedState = new SuspendedState();
     // true when the target code is stopped
     private boolean stopped = false;
+    private boolean disconnecting = false;
 
     public CarpetDebugHost(@Nonnull CarpetScriptServer scriptServer, @Nonnull InputStream is, @Nonnull OutputStream os) {
         this.scriptServer = scriptServer;
-        debugAdapter = new CarpetDebugAdapter(queue, this);
+        debugAdapter = new CarpetDebugAdapter(channel, this);
         Launcher<IDebugProtocolClient> launcher = DSPLauncher.createServerLauncher(debugAdapter, is, os);
         debugClient = launcher.getRemoteProxy();
         launcher.startListening();
-        debugClient.initialized();
     }
 
+    @Nonnull
     public SuspendedState getSuspendedState() {
         return suspendedState;
     }
@@ -91,8 +96,8 @@ public final class CarpetDebugHost {
         sendOutput(module, line, character, output, null);
     }
 
-    private boolean shouldStop(@Nonnull Module module, int line) {
-        if (stopped) return true;
+    // TODO: not working correctly with ; operator which is... everywhere
+    private boolean isBreakpointHit(@Nonnull Module module, int line) {
         ModuleSource moduleSource = getModuleSource(module);
         int[] lines = breakpoints.get(moduleSource.path());
         if (lines == null) return false;
@@ -105,13 +110,17 @@ public final class CarpetDebugHost {
     // Launch any program as requested by the debugger
     private void launch(@Nonnull LaunchParams params) {
         if (entrypoint != null) return;
+        scriptServer.server.getCommandSource().sendFeedback(
+                () -> Messenger.c(" [DAP]: Client requested launch: " + params.program()),
+                true
+        );
         entrypoint = Module.fromPath(Path.of(params.program()));
         String name = entrypoint.name();
 
         StackTrace stackTrace = new StackTrace(stackFrameNext);
         stackTraces.put(1, stackTrace);
 
-        // From CarpetScriptServer.addScriptHost(), we have to do it ourselves.
+        // From CarpetScriptServer.addScriptHost(), we have to do it ourselves, doing it with mixins would be worse mess
         Runnable token = Carpet.startProfilerSection("Scarpet debug load");
         ServerCommandSource source = scriptServer.server.getCommandSource();
         long start = System.nanoTime();
@@ -120,24 +129,23 @@ public final class CarpetDebugHost {
             scriptServer.removeScriptHost(source, name, false, false);
             reload = true;
         }
-        CarpetScriptHost newHost;
         try {
-            newHost = CarpetScriptHost.create(scriptServer, entrypoint, true, source, null, false, null);
+            host = CarpetScriptHost.create(scriptServer, entrypoint, true, source, null, false, null);
         } catch (LoadException e) {
             Carpet.Messenger_message(source, "r Failed to add " + name + " app" + (e.getMessage() == null ? "" : ": " + e.getMessage()));
             return;
         }
 
-        scriptServer.modules.put(name, newHost);
+        scriptServer.modules.put(name, host);
         scriptServer.unloadableModules.add(name);
 
-        if (!newHost.persistenceRequired) {
+        if (!host.persistenceRequired) {
             scriptServer.removeScriptHost(source, name, false, false);
             return;
         }
         String action = reload ? "reloaded" : "loaded";
 
-        Boolean isCommandAdded = newHost.addAppCommands(s -> {
+        Boolean isCommandAdded = host.addAppCommands(s -> {
             Carpet.Messenger_message(source, "r Failed to add app '" + name + "': ", s);
         });
         if (isCommandAdded == null) {
@@ -150,16 +158,16 @@ public final class CarpetDebugHost {
             Carpet.Messenger_message(source, "gi " + name + " app " + action);
         }
 
-        if (newHost.isPerUser()) {
+        if (host.isPerUser()) {
             // that will provide player hosts right at the startup
             for (ServerPlayerEntity player : source.getServer().getPlayerManager().getPlayerList()) {
-                newHost.retrieveForExecution(player.getCommandSource(), player);
+                host.retrieveForExecution(player.getCommandSource(), player);
             }
         } else {
             // global app - calling start now.
-            FunctionValue onStart = newHost.getFunction("__on_start");
+            FunctionValue onStart = host.getFunction("__on_start");
             if (onStart != null) {
-                newHost.callNow(onStart, Collections.emptyList());
+                host.callNow(onStart, Collections.emptyList());
             }
         }
         token.run();
@@ -167,16 +175,40 @@ public final class CarpetDebugHost {
         LOGGER.info("App " + name + " loaded in " + (end - start) / 1000000 + " ms");
     }
 
+    private void terminate() {
+        scriptServer.server.getCommandSource().sendFeedback(
+                () -> Messenger.c(" [DAP]: Client disconnected, debugging session terminated"),
+                true
+        );
+        if (entrypoint != null) {
+            scriptServer.removeScriptHost(scriptServer.server.getCommandSource(), entrypoint.name(), false, false);
+        }
+        CarpetDebugExtension.setDebugHost(null);
+    }
+
+    public void disconnect() {
+        disconnecting = true;
+    }
+
     // To be executed on each tick
     public void onTick() {
         // If there's an entrypoint launch() already happened.
-        if (entrypoint != null) return;
-        // This is kind of smelly; but I didn't find a good point to catch the launch request from the minecraft
-        // thread. This has to be from the main server thread since Scarpet execution always starts from there.
-        // This is also technically not that great, since we may execute in different parts of the tick lifetime.
-        Record record = queue.poll();
-        if (record instanceof final LaunchParams params) {
-            launch(params);
+        if (entrypoint != null) {
+            if (disconnecting) terminate();
+        } else {
+            // This is kind of smelly; but I didn't find a good point to catch the launch request from the minecraft
+            // thread. This has to be from the main server thread since Scarpet execution always starts from there.
+            // This is also technically not that great, since we may execute in different parts of the tick lifetime.
+            Record record = channel.poll();
+            if (record instanceof final LaunchParams params) {
+                launch(params);
+            } else if (record instanceof final InitializeParams params) {
+                debugClient.initialized();
+                scriptServer.server.getCommandSource().sendFeedback(
+                        () -> Messenger.c(" [DAP]: Client '" + params.clientName() + "' connected"),
+                        true
+                );
+            }
         }
     }
 
@@ -192,11 +224,10 @@ public final class CarpetDebugHost {
     public void pushStackFrame(@Nonnull String name, @Nonnull List<String> args, @Nonnull Context context, @Nonnull Module module, int startLine, int startCharacter) {
         int sourceReference = getSourceReference(module);
         StackTrace stackTrace = stackTraces.get(1);
-        ModuleSource moduleSource = getModuleSource(module);
-        if (moduleSource == null) throw new NullPointerException();
-        StackTrace.CarpetStackFrame stackFrame = stackTrace.addStackFrame(args, context, name, module, moduleSource, sourceReference, startLine, startCharacter);
+        StackTrace.CarpetStackFrame stackFrame = stackTrace.addStackFrame(args, context, name, module, getModuleSource(module), sourceReference, startLine, startCharacter);
         stackFrames.put(stackFrame.id, stackFrame);
     }
+
     private int getSourceReference(@Nonnull Module module) {
         // Get or add to the modules to have a valid sourceReference.
         int sourceReference;
@@ -207,73 +238,91 @@ public final class CarpetDebugHost {
                 modules.add(module);
             }
         }
-        return sourceReference;
+        return sourceReference + 1;
     }
 
+    @Nonnull
     private Source getSource(@Nonnull Module module, @Nonnull ModuleSource moduleSource) {
         Source source = new Source();
         source.setName(module.name());
-        if (moduleSource.type() == ModuleSource.Type.FILESYSTEM)
+        if (moduleSource.type() == ModuleSource.Type.FILESYSTEM) {
             source.setPath(moduleSource.path());
-        else
+        } else {
+            source.setSourceReference(getSourceReference(module));
             source.setOrigin("built-in scripts");
-        source.setSourceReference(getSourceReference(module));
+        }
         return source;
     }
 
     public void popStackFrame() {
+        // TODO: thread id?
         StackTrace stackTrace = stackTraces.get(1);
         stackTrace.popStackFrame();
     }
 
-    // Function called from within Scarpet evaluation to set all the important information to
+    // Function called from within Scarpet evaluation
     public void setStackTrace(@Nonnull Context context, @Nonnull Module module, int line, int character) {
+        // TODO: thread id?
         StackTrace stackTrace = stackTraces.get(1);
         if (stackTrace.isEmpty()) {
-            StackTrace.CarpetStackFrame stackFrame = stackTrace.addStackFrame(null, context, "<global>", module, getModuleSource(module), getSourceReference(module), line, character);
+            StackTrace.CarpetStackFrame stackFrame = stackTrace.addStackFrame(
+                    null,
+                    context,
+                    "<global>",
+                    module,
+                    getModuleSource(module),
+                    getSourceReference(module),
+                    line,
+                    character
+            );
             stackFrames.put(stackFrame.id, stackFrame);
-        } else
-        stackTrace.updateStackFrame(null, context, module, module == null ? null : getModuleSource(module), getSourceReference(module), line, character);
-        LOGGER.info("trace at line {}", line);
-        if (shouldStop(module, line)) {
-            StoppedEventArguments stoppedEventArguments = new StoppedEventArguments();
-            stoppedEventArguments.setReason("breakpoint");
-            stoppedEventArguments.setThreadId(1);
-            debugClient.stopped(stoppedEventArguments);
-            while (true) {
-                Record record = null;
-                try {
-                    record = queue.take();
-                } catch (InterruptedException ex) {
-                    //
-                }
-                if (record instanceof ContinueParams) {
-                    stopped = false;
-                    break;
-                } else if (record instanceof NextParams) {
-                    stopped = true;
-                    break;
-                }
-            }
-            suspendedState = new SuspendedState();
+        } else {
+            stackTrace.updateStackFrame(context, line, character);
         }
+        StoppedEventArguments stoppedEventArguments = new StoppedEventArguments();
+        stoppedEventArguments.setThreadId(1);
+        if (stopped) {
+            stoppedEventArguments.setReason(StoppedEventArgumentsReason.STEP);
+        } else if (isBreakpointHit(module, line)) {
+            stoppedEventArguments.setReason(StoppedEventArgumentsReason.BREAKPOINT);
+        } else {
+            return;
+        }
+        debugClient.stopped(stoppedEventArguments);
+        while (true) {
+            Record record = null;
+            try {
+                record = channel.take();
+            } catch (InterruptedException ex) {
+                //
+            }
+            if (record instanceof ContinueParams) {
+                stopped = false;
+                break;
+            } else if (record instanceof NextParams) {
+                stopped = true;
+                break;
+            }
+        }
+        // Suspended resets on every frame
+        suspendedState = new SuspendedState();
     }
 
-    public void setBreakpoints(String path, SourceBreakpoint[] bps, boolean linesStartAt1) {
+    public void setBreakpoints(String path, SourceBreakpoint[] bps) {
         int[] lines = new int[bps.length];
         int i = 0;
         for (SourceBreakpoint bp : bps) {
-            lines[i] = bp.getLine() - (linesStartAt1 ? 1 : 0);
+            lines[i] = bp.getLine() - (debugAdapter.getLinesStartAt1() ? 1 : 0);
             i++;
         }
         breakpoints.put(path, lines);
     }
 
-    public StackFrame[] getStackTrace(int threadId, boolean linesStartAt1, boolean columnsStartAt1) {
-        return stackTraces.get(threadId).getStackFrames(linesStartAt1, columnsStartAt1);
+    public StackFrame[] getStackTrace(int threadId) {
+        return stackTraces.get(threadId).getStackFrames(debugAdapter.getLinesStartAt1(), debugAdapter.getColumnsStartAt1());
     }
 
-    public Scope[] getScopes(int frameId, SuspendedState suspendedState) {
+    public Scope[] getScopes(int frameId) {
         return stackFrames.get(frameId).getScopes(suspendedState);
     }
 
@@ -283,7 +332,7 @@ public final class CarpetDebugHost {
      */
     public Module getModule(int sourceReference) {
         synchronized (modules) {
-            return modules.get(sourceReference);
+            return modules.get(sourceReference - 1);
         }
     }
 }

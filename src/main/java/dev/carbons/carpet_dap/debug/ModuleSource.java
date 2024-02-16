@@ -38,6 +38,7 @@ public record ModuleSource(@Nonnull Type type, @Nonnull String path) {
      */
     @Nonnull
     public static ModuleSource getModuleSource(@Nonnull Module module) {
+        // See ModuleMixin, not expecting Modules to be created without fromPath or from fromJarPath
         return Objects.requireNonNull(moduleSources.get(module));
     }
 

@@ -5,6 +5,8 @@ import carpet.script.Module;
 import carpet.script.value.FunctionValue;
 import carpet.script.value.ThreadValue;
 import carpet.script.value.Value;
+import dev.carbons.carpet_dap.CarpetDebugExtension;
+import dev.carbons.carpet_dap.debug.CarpetDebugHost;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
@@ -13,20 +15,28 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 import org.spongepowered.asm.mixin.injection.callback.LocalCapture;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
-
-import static dev.carbons.carpet_dap.CarpetDebugExtension.debugHost;
-import static dev.carbons.carpet_dap.CarpetDebugMod.LOGGER;
 
 @SuppressWarnings("unused")
 @Mixin(value = FunctionValue.class, remap = false)
 public class FunctionValueMixin {
-    @Shadow
+    @Shadow(remap = false)
     private String name;
-    @Shadow
+    @Shadow(remap = false)
     private List<String> args;
-    @Shadow
+    @Shadow(remap = false)
     private String varArgs;
+
+    private List<String> getArgs() {
+        List<String> arguments = args;
+        if (varArgs != null) {
+            arguments = new ArrayList<>(arguments);
+            arguments.add(varArgs);
+        }
+        // Make sure we don't modify the arguments list by accident
+        return Collections.unmodifiableList(arguments);
+    }
 
     @Inject(
             method = "Lcarpet/script/value/FunctionValue;execute(Lcarpet/script/Context;Lcarpet/script/Context$Type;Lcarpet/script/Expression;Lcarpet/script/Tokenizer$Token;Ljava/util/List;Lcarpet/script/value/ThreadValue;)Lcarpet/script/LazyValue;",
@@ -48,15 +58,12 @@ public class FunctionValueMixin {
             Context functionContext
     ) {
         Module module = expression.module;
+        CarpetDebugHost debugHost = CarpetDebugExtension.getDebugHost();
         if (debugHost == null || module == null) return;
-        // Stop before executing the function
+        // Set stack trace before executing the function
         debugHost.setStackTrace(functionContext, module, token.lineno, token.linepos);
-        List<String> newParams = args;
-        if (varArgs != null) {
-            newParams = new ArrayList<>(newParams);
-            newParams.add(varArgs);
-        }
-        debugHost.pushStackFrame(name == null || name.equals("_") ? "<anonymous>" : name, newParams, functionContext, module, token.lineno, token.linepos);
+        // About to execute, push the new stack frame
+        debugHost.pushStackFrame(name == null || name.equals("_") ? "<lambda>" : name, getArgs(), functionContext, module, token.lineno, token.linepos);
     }
 
     @Inject(
@@ -75,8 +82,9 @@ public class FunctionValueMixin {
             CallbackInfoReturnable<LazyValue> ci,
             Context functionContext
     ) {
+        CarpetDebugHost debugHost = CarpetDebugExtension.getDebugHost();
         if (debugHost == null || expression.module == null) return;
-        // Got to the return of the function pop out one stack frame.
+        // The function is returning; pop out one stack frame.
         debugHost.popStackFrame();
     }
 }

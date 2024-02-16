@@ -27,8 +27,6 @@ public class CarpetDebugAdapter implements IDebugProtocolServer {
     // When true the debugger client sends lines and columns starting from 1 instead of 0
     private boolean linesStartAt1 = false;
     private boolean columnsStartAt1 = false;
-    private AtomicInteger sourceReferenceNext = new AtomicInteger(1);
-    private Source source;
 
     public CarpetDebugAdapter(BlockingQueue<Record> sender, CarpetDebugHost debugHost) {
         this.sender = sender;
@@ -63,8 +61,8 @@ public class CarpetDebugAdapter implements IDebugProtocolServer {
 
     @Override
     public CompletableFuture<SourceResponse> source(SourceArguments args) {
-        //
-        var sourceResponse = new SourceResponse();
+        // Return source code for modules
+        SourceResponse sourceResponse = new SourceResponse();
         Integer sourceReference = args.getSource().getSourceReference();
         if (sourceReference != null && sourceReference != 0) {
             Module module = debugHost.getModule(sourceReference);
@@ -74,12 +72,12 @@ public class CarpetDebugAdapter implements IDebugProtocolServer {
         return completedFuture(sourceResponse);
     }
 
-
     @Override
     public CompletableFuture<Capabilities> initialize(InitializeRequestArguments args) {
         LOGGER.info("[DAP]: initialize()");
         if (args.getLinesStartAt1()) linesStartAt1 = true;
         if (args.getColumnsStartAt1()) columnsStartAt1 = true;
+        sender.add(new InitializeParams(args.getClientName()));
         var capabilities = new Capabilities();
         // TODO: which capabilities do we support?
         return completedFuture(capabilities);
@@ -115,11 +113,13 @@ public class CarpetDebugAdapter implements IDebugProtocolServer {
         }
         LOGGER.info("[DAP]: launch program {}", program);
         LOGGER.info("[DAP]: noDebug {}", noDebug);
+        var params = new LaunchParams(program, noDebug != null && noDebug, trace != null && trace, stopOnEvent != null && stopOnEvent);
         try {
             // Put makes sure to wait until the onTick handler picks up the launch event.
-            sender.put(new LaunchParams(program, noDebug != null && noDebug, trace == null || trace, stopOnEvent != null && stopOnEvent));
+            sender.put(params);
         } catch (InterruptedException ex) {
-            LOGGER.error("[DAP]: Had an oopsie: {}", ex.toString());
+            debugHost.sendToConsole(ex.toString());
+            LOGGER.error("[DAP]: InterruptedException {}", ex.toString());
         }
         return completedFuture(null);
     }
@@ -127,12 +127,26 @@ public class CarpetDebugAdapter implements IDebugProtocolServer {
     @Override
     public CompletableFuture<Void> disconnect(DisconnectArguments args) {
         LOGGER.info("[DAP]: disconnect()");
+        try {
+            sender.put(new ContinueParams());
+        } catch (InterruptedException ex) {
+            debugHost.sendToConsole(ex.toString());
+            LOGGER.error("[DAP]: InterruptedException {}", ex.toString());
+        }
+        debugHost.disconnect();
         return completedFuture(null);
     }
 
     @Override
     public CompletableFuture<ContinueResponse> continue_(ContinueArguments args) {
-        return IDebugProtocolServer.super.continue_(args);
+        LOGGER.info("[DAP]: continue()");
+        try {
+            sender.put(new ContinueParams());
+        } catch (InterruptedException ex) {
+            debugHost.sendToConsole(ex.toString());
+            LOGGER.error("[DAP]: InterruptedException {}", ex.toString());
+        }
+        return completedFuture(null);
     }
 
     @Override
@@ -141,24 +155,17 @@ public class CarpetDebugAdapter implements IDebugProtocolServer {
         try {
             sender.put(new NextParams());
         } catch (InterruptedException ex) {
-            //
+            debugHost.sendToConsole(ex.toString());
+            LOGGER.error("[DAP]: InterruptedException {}", ex.toString());
         }
         return completedFuture(null);
     }
 
-//    @Override
-//    public CompletableFuture<BreakpointLocationsResponse> breakpointLocations(BreakpointLocationsArguments args) {
-//        return IDebugProtocolServer.super.breakpointLocations(args);
-//    }
-
     @Override
     public CompletableFuture<SetBreakpointsResponse> setBreakpoints(SetBreakpointsArguments args) {
         LOGGER.info("[DAP]: setBreakpoints()");
-        LOGGER.info(args.toString());
-        source = args.getSource();
-        debugHost.setBreakpoints(args.getSource().getPath(), args.getBreakpoints(), linesStartAt1);
-        var res = new SetBreakpointsResponse();
-        return completedFuture(res);
+        debugHost.setBreakpoints(args.getSource().getPath(), args.getBreakpoints());
+        return completedFuture(new SetBreakpointsResponse());
     }
 
     @Override
@@ -168,27 +175,29 @@ public class CarpetDebugAdapter implements IDebugProtocolServer {
 
     @Override
     public CompletableFuture<EvaluateResponse> evaluate(EvaluateArguments args) {
-        return IDebugProtocolServer.super.evaluate(args);
+//        StackTrace.CarpetStackFrame.toVariable("value", debugHost.evaluate(args.getExpression(), args.getFrameId()), debugHost.getSuspendedState());
+        debugHost.sendToConsole("evaluate() is not implemented");
+        return completedFuture(new EvaluateResponse());
     }
 
     @Override
     public CompletableFuture<StackTraceResponse> stackTrace(StackTraceArguments args) {
-        StackFrame[] stackTrace = debugHost.getStackTrace(args.getThreadId(), linesStartAt1, columnsStartAt1);
-        var res = new StackTraceResponse();
+        StackFrame[] stackTrace = debugHost.getStackTrace(args.getThreadId());
+        StackTraceResponse res = new StackTraceResponse();
         res.setStackFrames(stackTrace);
         return completedFuture(res);
     }
 
     @Override
     public CompletableFuture<ScopesResponse> scopes(ScopesArguments args) {
-        var scopes = new ScopesResponse();
-        scopes.setScopes(debugHost.getScopes(args.getFrameId(), debugHost.getSuspendedState()));
+        ScopesResponse scopes = new ScopesResponse();
+        scopes.setScopes(debugHost.getScopes(args.getFrameId()));
         return completedFuture(scopes);
     }
 
     @Override
     public CompletableFuture<VariablesResponse> variables(VariablesArguments args) {
-        var vars = new VariablesResponse();
+        VariablesResponse vars = new VariablesResponse();
         vars.setVariables(debugHost.getSuspendedState().get(args.getVariablesReference()));
         return completedFuture(vars);
     }
